@@ -104,8 +104,8 @@ jobs:
 
           ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
 
-          gh api repos/${{ github.repository }}/issues/${ISSUE_NUM}/assignees             -f "assignees[]=copilot" || echo "Note: Could not assign copilot. Assign manually or use @claude in a comment."
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}"             --body "@claude Please review this upstream sync. Check that our custom models are intact (github-copilot provider with 22 models including claude-opus-4.6/gemini-3.1-pro/gpt-5.2-codex, google gemini-3.1-pro/gemini-3-flash-preview/gemini-3-pro-preview). Verify api.json generation still works. If issues found, create a fix PR. If everything is fine, close this issue."
 
-          echo "Created issue #${ISSUE_NUM}: ${ISSUE_URL}"
+          echo "Created issue #${ISSUE_NUM} and assigned @claude: ${ISSUE_URL}"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
