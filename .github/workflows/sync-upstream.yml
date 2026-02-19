@@ -65,11 +65,12 @@ jobs:
       - name: Trigger deploy
         if: steps.merge.outputs.status == 'success'
         run: |
-          gh api repos/${{ github.repository }}/dispatches             -f event_type=sync-completed
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=sync-completed
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
 
-      - name: Create conflict issue
+      - name: Create conflict issue and assign Copilot
         if: steps.merge.outputs.status == 'conflict'
         run: |
           TITLE="🔀 Upstream sync conflict detected"
@@ -93,10 +94,32 @@ jobs:
 
           After resolving, ensure \`api.json\` still includes all custom models."
 
-          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}"             --title "$TITLE"             --body "$BODY"             --label "sync,conflict")
-          
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "sync,conflict")
+
           ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
-          
-          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}"             --body "@claude Please resolve this merge conflict. Preserve our custom models in providers/ (github-copilot, google gemini-3.1-pro). Use -X theirs for non-provider files. Create a fix PR."
+
+          # Get issue and repo node IDs for GraphQL Copilot assignment
+          ISSUE_NODE_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.node_id')
+          REPO_NODE_ID=$(gh api "repos/${{ github.repository }}" --jq '.node_id')
+
+          # Assign Copilot with Claude partner agent
+          # BOT_kgDOC9w8XQ = copilot-swe-agent bot ID (from suggestedActors query)
+          INSTRUCTIONS="Resolve this merge conflict. Preserve our custom models in providers/ (github-copilot with 22 models, google gemini-3.1-pro). Use -X theirs for non-provider files. Ensure api.json generation still works. Create a fix PR."
+
+          gh api graphql \
+            -H "GraphQL-Features: issues_copilot_assignment_api_support,coding_agent_model_selection" \
+            -f query='mutation($issue: ID!, $bot: ID!, $repo: ID!, $ref: String!, $instructions: String!, $agent: String!, $model: String!) { addAssigneesToAssignable(input: { assignableId: $issue, assigneeIds: [$bot], agentAssignment: { targetRepositoryId: $repo, baseRef: $ref, customInstructions: $instructions, customAgent: $agent, model: $model } }) { assignable { ... on Issue { number assignees(first: 5) { nodes { login } } } } } }' \
+            -f issue="$ISSUE_NODE_ID" \
+            -f bot="BOT_kgDOC9w8XQ" \
+            -f repo="$REPO_NODE_ID" \
+            -f ref="dev" \
+            -f instructions="$INSTRUCTIONS" \
+            -f agent="claude" \
+            -f model=""
+
+          echo "Created conflict issue #${ISSUE_NUM} and assigned Copilot (Claude): ${ISSUE_URL}"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
