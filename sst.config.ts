@@ -22,7 +22,6 @@ export default $config({
 
     const worker = new sst.cloudflare.Worker("Server", {
       url: true,
-      domain: $app.stage === "dev" ? "models.dev" : undefined,
       link: [secrets.PosthogToken],
       handler: "./packages/function/src/worker.ts",
       assets: {
