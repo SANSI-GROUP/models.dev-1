@@ -1,0 +1,42 @@
+name: Sync with Upstream
+
+# Automatically sync this fork with the upstream repository
+# Runs on a schedule and can be triggered manually
+
+on:
+  schedule:
+    # Run every 6 hours to keep fork in sync
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/anomalyco/models.dev || true
+          git fetch upstream
+
+      - name: Sync dev branch
+        run: |
+          git checkout dev || git checkout -b dev
+          git reset --hard upstream/dev
+          git push --force origin dev
+
+      - name: Sync other branches if needed
+        run: |
+          # Add additional branch syncing here if needed
+          echo "Main dev branch synced successfully"
