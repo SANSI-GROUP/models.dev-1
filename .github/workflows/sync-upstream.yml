@@ -97,6 +97,6 @@ jobs:
           
           ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
           
-          gh api repos/${{ github.repository }}/issues/${ISSUE_NUM}/assignees             -f "assignees[]=copilot" || true
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}"             --body "@claude Please resolve this merge conflict. Preserve our custom models in providers/ (github-copilot, google gemini-3.1-pro). Use -X theirs for non-provider files. Create a fix PR."
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
