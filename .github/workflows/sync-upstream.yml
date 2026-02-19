@@ -40,3 +40,30 @@ jobs:
         run: |
           # Add additional branch syncing here if needed
           echo "Main dev branch synced successfully"
+
+      - name: Trigger deployment workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              // Try workflow_dispatch first
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'deploy.yml',
+                ref: 'dev'
+              });
+              console.log('Deploy workflow triggered via workflow_dispatch');
+
+              // Also send repository_dispatch as a backup
+              await github.rest.repos.createDispatchEvent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                event_type: 'sync-completed'
+              });
+              console.log('Repository dispatch event sent');
+            } catch (error) {
+              console.error('Failed to trigger deploy workflow:', error);
+              // Don't fail the sync if deploy trigger fails
+            }

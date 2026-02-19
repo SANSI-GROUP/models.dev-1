@@ -5,6 +5,8 @@ on:
     branches:
       - dev
   workflow_dispatch:
+  repository_dispatch:
+    types: [sync-completed]
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
