@@ -38,7 +38,6 @@ jobs:
 
           PROVIDERS_CHANGED=$(echo "$CHANGED" | grep "^providers/" || true)
           CORE_CHANGED=$(echo "$CHANGED" | grep "^packages/core/" || true)
-          WORKFLOW_CHANGED=$(echo "$CHANGED" | grep "^.github/" || true)
 
           echo "providers_changed<<EOF" >> "$GITHUB_OUTPUT"
           echo "$PROVIDERS_CHANGED" >> "$GITHUB_OUTPUT"
@@ -55,7 +54,7 @@ jobs:
           COUNT=$(echo "$CHANGED" | wc -l)
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Create review issue for Claude
+      - name: Create review issue and assign Copilot
         if: steps.changes.outputs.found == 'true'
         run: |
           TITLE="🔍 Review upstream sync: ${{ steps.changes.outputs.merge_msg }}"
@@ -100,12 +99,32 @@ jobs:
           ISSUE_BODY
           )
 
-          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}"             --title "$TITLE"             --body "$BODY"             --label "sync-review,automated")
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "sync-review,automated")
 
           ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
 
-          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}"             --body "@claude Please review this upstream sync. Check that our custom models are intact (github-copilot provider with 22 models including claude-opus-4.6/gemini-3.1-pro/gpt-5.2-codex, google gemini-3.1-pro/gemini-3-flash-preview/gemini-3-pro-preview). Verify api.json generation still works. If issues found, create a fix PR. If everything is fine, close this issue."
+          # Get issue and repo node IDs for GraphQL Copilot assignment
+          ISSUE_NODE_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.node_id')
+          REPO_NODE_ID=$(gh api "repos/${{ github.repository }}" --jq '.node_id')
 
-          echo "Created issue #${ISSUE_NUM} and assigned @claude: ${ISSUE_URL}"
+          # Assign Copilot with Claude partner agent
+          # BOT_kgDOC9w8XQ = copilot-swe-agent bot ID (from suggestedActors query)
+          INSTRUCTIONS="Review this upstream sync. Verify our custom models are intact: github-copilot provider with 22 models including claude-opus-4.6, gemini-3.1-pro, gpt-5.2-codex; google provider with gemini-3.1-pro, gemini-3-flash-preview, gemini-3-pro-preview. Verify api.json generation still works by checking packages/core/src/generate.ts and the TOML schemas. If issues found, create a fix PR. If everything is fine, close this issue."
+
+          gh api graphql \
+            -H "GraphQL-Features: issues_copilot_assignment_api_support,coding_agent_model_selection" \
+            -f query='mutation($issue: ID!, $bot: ID!, $repo: ID!, $ref: String!, $instructions: String!, $agent: String!, $model: String!) { addAssigneesToAssignable(input: { assignableId: $issue, assigneeIds: [$bot], agentAssignment: { targetRepositoryId: $repo, baseRef: $ref, customInstructions: $instructions, customAgent: $agent, model: $model } }) { assignable { ... on Issue { number assignees(first: 5) { nodes { login } } } } } }' \
+            -f issue="$ISSUE_NODE_ID" \
+            -f bot="BOT_kgDOC9w8XQ" \
+            -f repo="$REPO_NODE_ID" \
+            -f ref="dev" \
+            -f instructions="$INSTRUCTIONS" \
+            -f agent="claude" \
+            -f model=""
+
+          echo "Created issue #${ISSUE_NUM} and assigned Copilot (Claude): ${ISSUE_URL}"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
