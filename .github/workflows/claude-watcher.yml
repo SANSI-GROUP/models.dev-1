@@ -1,0 +1,111 @@
+name: Claude Watcher
+
+on:
+  repository_dispatch:
+    types: [sync-completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Find recent upstream merges
+        id: changes
+        run: |
+          LAST_MERGE=$(git log --merges -1 --format="%H" 2>/dev/null || echo "")
+          if [ -z "$LAST_MERGE" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "${LAST_MERGE}^1..${LAST_MERGE}" 2>/dev/null || echo "")
+          if [ -z "$CHANGED" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "merge=$LAST_MERGE" >> "$GITHUB_OUTPUT"
+          echo "merge_msg=$(git log -1 --format='%s' $LAST_MERGE)" >> "$GITHUB_OUTPUT"
+
+          PROVIDERS_CHANGED=$(echo "$CHANGED" | grep "^providers/" || true)
+          CORE_CHANGED=$(echo "$CHANGED" | grep "^packages/core/" || true)
+          WORKFLOW_CHANGED=$(echo "$CHANGED" | grep "^.github/" || true)
+
+          echo "providers_changed<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$PROVIDERS_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          echo "core_changed<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CORE_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          echo "all_changed<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          COUNT=$(echo "$CHANGED" | wc -l)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Create review issue for Claude
+        if: steps.changes.outputs.found == 'true'
+        run: |
+          TITLE="🔍 Review upstream sync: ${{ steps.changes.outputs.merge_msg }}"
+          BODY=$(cat <<'ISSUE_BODY'
+          ## Upstream Sync Review
+
+          A new merge from upstream was detected. Please review the changes and ensure our custom models and configurations are intact.
+
+          ### Merge commit
+          `${{ steps.changes.outputs.merge }}`
+
+          ### Files changed (${{ steps.changes.outputs.count }})
+
+          <details>
+          <summary>All changed files</summary>
+
+          ```
+          ${{ steps.changes.outputs.all_changed }}
+          ```
+          </details>
+
+          **Provider changes:**
+          ```
+          ${{ steps.changes.outputs.providers_changed }}
+          ```
+
+          **Core changes:**
+          ```
+          ${{ steps.changes.outputs.core_changed }}
+          ```
+
+          ### Tasks
+
+          1. Verify our custom models still exist and are correctly defined:
+             - `providers/github-copilot/models/` (22 models including claude-opus-4.6, gemini-3.1-pro, gpt-5.2-codex)
+             - `providers/google/models/gemini-3.1-pro.toml`
+             - `providers/google/models/gemini-3-flash-preview.toml`
+             - `providers/google/models/gemini-3-pro-preview.toml`
+          2. If upstream changed provider schemas or the generate script (`packages/core/`), verify `api.json` generation still works
+          3. Check if any upstream provider TOML changes conflict with our custom models
+          4. If issues found, create a fix PR. If everything is fine, close this issue with a comment confirming all checks passed.
+          ISSUE_BODY
+          )
+
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}"             --title "$TITLE"             --body "$BODY"             --label "sync-review,automated")
+
+          ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
+
+          gh api repos/${{ github.repository }}/issues/${ISSUE_NUM}/assignees             -f "assignees[]=copilot" || echo "Note: Could not assign copilot. Assign manually or use @claude in a comment."
+
+          echo "Created issue #${ISSUE_NUM}: ${ISSUE_URL}"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
