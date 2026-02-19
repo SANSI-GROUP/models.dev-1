@@ -1,5 +1,6 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+// Test comment: default Copilot agent (no Claude partner)
 export default $config({
   app() {
     return {
