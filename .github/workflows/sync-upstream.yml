@@ -1,69 +1,102 @@
-name: Sync with Upstream
-
-# Automatically sync this fork with the upstream repository
-# Runs on a schedule and can be triggered manually
+name: Sync Upstream
 
 on:
   schedule:
-    # Run every 6 hours to keep fork in sync
-    - cron: '0 */6 * * *'
+    - cron: "*/15 * * * *"
   workflow_dispatch:
-    # Allow manual triggering
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add upstream remote
         run: |
-          git remote add upstream https://github.com/anomalyco/models.dev || true
-          git fetch upstream
+          git remote add upstream https://github.com/anomalyco/models.dev.git || true
+          git fetch upstream dev
 
-      - name: Sync dev branch
+      - name: Check for new commits
+        id: check
         run: |
-          git checkout dev || git checkout -b dev
-          git reset --hard upstream/dev
-          git push --force origin dev
+          BEHIND=$(git rev-list HEAD..upstream/dev --count)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "Already up to date"
+          else
+            echo "Found $BEHIND new upstream commits"
+            COMMITS=$(git log HEAD..upstream/dev --oneline --no-merges | head -20)
+            echo "commits<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$COMMITS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Sync other branches if needed
+      - name: Merge upstream
+        if: steps.check.outputs.behind != '0'
+        id: merge
         run: |
-          # Add additional branch syncing here if needed
-          echo "Main dev branch synced successfully"
+          if git merge upstream/dev --no-edit -X theirs; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            echo "conflicts<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CONFLICTS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
 
-      - name: Trigger deployment workflow
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            try {
-              // Try workflow_dispatch first
-              await github.rest.actions.createWorkflowDispatch({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'deploy.yml',
-                ref: 'dev'
-              });
-              console.log('Deploy workflow triggered via workflow_dispatch');
+      - name: Push changes
+        if: steps.merge.outputs.status == 'success'
+        run: git push origin dev
 
-              // Also send repository_dispatch as a backup
-              await github.rest.repos.createDispatchEvent({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                event_type: 'sync-completed'
-              });
-              console.log('Repository dispatch event sent');
-            } catch (error) {
-              console.error('Failed to trigger deploy workflow:', error);
-              // Don't fail the sync if deploy trigger fails
-            }
+      - name: Trigger deploy
+        if: steps.merge.outputs.status == 'success'
+        run: |
+          gh api repos/${{ github.repository }}/dispatches             -f event_type=sync-completed
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Create conflict issue
+        if: steps.merge.outputs.status == 'conflict'
+        run: |
+          TITLE="🔀 Upstream sync conflict detected"
+          BODY="## Merge Conflict with upstream/dev
+
+          **Upstream commits to merge:** ${{ steps.check.outputs.behind }}
+
+          ### New upstream commits
+          \`\`\`
+          ${{ steps.check.outputs.commits }}
+          \`\`\`
+
+          ### Conflicting files
+          \`\`\`
+          ${{ steps.merge.outputs.conflicts }}
+          \`\`\`
+
+          ### Instructions
+          Resolve these merge conflicts while preserving our custom models (gemini-3.1-pro, opus-4.6, gpt-5.2-codex, etc.).
+          Merge upstream/dev into dev using \`-X theirs\` for non-provider files, but keep our additions in \`providers/\`.
+
+          After resolving, ensure \`api.json\` still includes all custom models."
+
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}"             --title "$TITLE"             --body "$BODY"             --label "sync,conflict")
+          
+          ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oP '\d+$')
+          
+          gh api repos/${{ github.repository }}/issues/${ISSUE_NUM}/assignees             -f "assignees[]=copilot" || true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
