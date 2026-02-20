@@ -70,6 +70,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
 
+      - name: Ensure labels exist
+        if: steps.merge.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          for label in sync conflict automated; do
+            gh label create "$label" --repo "${{ github.repository }}" --force --color "ededed" 2>/dev/null || true
+          done
+
       - name: Create conflict issue and assign Copilot
         if: steps.merge.outputs.status == 'conflict'
         run: |
@@ -106,8 +115,7 @@ jobs:
           REPO_NODE_ID=$(gh api "repos/${{ github.repository }}" --jq '.node_id')
 
           # Assign Copilot with Claude partner agent
-          # BOT_kgDOC9w8XQ = copilot-swe-agent bot ID (from suggestedActors query)
-          INSTRUCTIONS="Resolve this merge conflict. Preserve our custom models in providers/ (github-copilot with 22 models, google gemini-3.1-pro). Use -X theirs for non-provider files. Ensure api.json generation still works. Create a fix PR."
+          INSTRUCTIONS="Resolve this merge conflict. Preserve our custom models in providers/ (github-copilot with 22 models including claude-opus-4.6, gemini-3.1-pro, gpt-5.2-codex; google provider with gemini-3.1-pro, gemini-3-flash-preview, gemini-3-pro-preview). Use -X theirs for non-provider files. Ensure api.json generation still works. Create a fix PR."
 
           gh api graphql \
             -H "GraphQL-Features: issues_copilot_assignment_api_support,coding_agent_model_selection" \
