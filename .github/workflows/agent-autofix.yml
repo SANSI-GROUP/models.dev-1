@@ -35,7 +35,7 @@ jobs:
           bun-version: latest
 
       - name: Install lightweight CLI
-        run: bun install -g lightweight-ai
+        run: bun install -g --trust lightweight-ai
 
       - name: Seed Copilot auth
         run: |
