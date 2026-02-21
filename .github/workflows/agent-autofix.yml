@@ -13,7 +13,10 @@ jobs:
   autofix:
     if: github.event.label.name == 'agent-fix' && !github.event.issue.pull_request
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    concurrency:
+      group: agent-autofix-${{ github.event.issue.number }}
+      cancel-in-progress: false
 
     steps:
       - name: Generate bot token
@@ -40,7 +43,7 @@ jobs:
       - name: Seed Copilot auth
         run: |
           mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json << EOF
+          cat > ~/.local/share/opencode/auth.json << 'AUTHEOF'
           {
             "github-copilot": {
               "type": "oauth",
@@ -49,7 +52,7 @@ jobs:
               "expires": 0
             }
           }
-          EOF
+          AUTHEOF
           chmod 600 ~/.local/share/opencode/auth.json
 
       - name: Prepare prompt
@@ -58,23 +61,57 @@ jobs:
           script: |
             const fs = require('fs');
             const issue = context.payload.issue;
-            const prompt = [
-              `Fix GitHub issue #${issue.number}: ${issue.title}`,
-              ``,
-              `## Description`,
-              issue.body || 'No description provided.',
-              ``,
-              `## Instructions`,
-              `- The default branch is "dev".`,
-              `- This is a model registry project with TOML model configs in providers/<provider>/models/.`,
-              `- Read the project structure before making changes.`,
-              `- Make minimal, focused changes that fix only this issue.`,
-              `- Preserve all existing model configurations and provider structures.`,
-              `- If the issue is about a model config, validate TOML syntax.`,
-              ``,
-              `## After making changes`,
-              `Write a concise summary of what you changed and why to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
-            ].join('\n');
+            const isSyncReview = issue.labels.some(l => l.name === 'sync-review');
+
+            let prompt;
+            if (isSyncReview) {
+              prompt = [
+                `Resolve upstream sync review issue #${issue.number}: ${issue.title}`,
+                ``,
+                `## Context`,
+                issue.body || 'No description provided.',
+                ``,
+                `## Instructions`,
+                `- The default branch is "dev".`,
+                `- This is a model registry project. Models are TOML files in providers/<provider>/models/<model>.toml.`,
+                `- An upstream sync just merged new changes. Your job is to VERIFY and FIX any issues.`,
+                `- Read the issue body carefully — it lists specific files that changed and tasks to verify.`,
+                ``,
+                `## What to check and fix`,
+                `1. Check if any custom models were overwritten or deleted by the sync. Custom models may have fields or configs that differ from upstream.`,
+                `2. Check if any TOML files have syntax errors or invalid schema.`,
+                `3. Check if any new provider directories are missing required structure.`,
+                `4. If files were deleted that should exist, restore them from git history.`,
+                `5. If no issues found, create a small documentation fix or comment — do NOT leave the repo unchanged.`,
+                ``,
+                `## Important`,
+                `- Run \`find providers -name "*.toml" | head -30\` to see the project structure.`,
+                `- Validate TOML syntax of any changed files.`,
+                `- Make minimal, targeted fixes only.`,
+                `- If everything looks correct after verification, add a comment to the TOML file that was most recently changed (e.g. # verified <date>).`,
+                ``,
+                `## After making changes`,
+                `Write a concise summary of what you verified and changed to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
+              ].join('\n');
+            } else {
+              prompt = [
+                `Fix GitHub issue #${issue.number}: ${issue.title}`,
+                ``,
+                `## Description`,
+                issue.body || 'No description provided.',
+                ``,
+                `## Instructions`,
+                `- The default branch is "dev".`,
+                `- This is a model registry project with TOML model configs in providers/<provider>/models/<model>.toml.`,
+                `- Read the project structure before making changes.`,
+                `- Make minimal, focused changes that fix only this issue.`,
+                `- Preserve all existing model configurations and provider structures.`,
+                `- If the issue is about a model config, validate TOML syntax.`,
+                ``,
+                `## After making changes`,
+                `Write a concise summary of what you changed and why to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
+              ].join('\n');
+            }
             fs.writeFileSync('/tmp/agent-prompt.txt', prompt);
 
       - name: Run agent
@@ -158,20 +195,6 @@ jobs:
           delete-branch: true
           labels: automated,needs-review
 
-      - name: Assign reviewer on PR
-        if: steps.changes.outputs.has_changes == 'true' && steps.pr.outputs.pull-request-number
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.bot.outputs.token }}
-          script: |
-            const pr = ${{ steps.pr.outputs.pull-request-number }};
-            await github.rest.pulls.requestReviewers({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr,
-              reviewers: ['brunusansi']
-            });
-
       - name: Comment on issue (success)
         if: steps.changes.outputs.has_changes == 'true'
         uses: actions/github-script@v7
@@ -182,7 +205,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 Agent created a pull request to fix this issue. Review incoming.'
+              body: '\u{1F916} Agent created a pull request to fix this issue.'
             });
 
       - name: Flag for manual review
@@ -198,17 +221,11 @@ jobs:
               issue_number: issue,
               labels: ['needs-review']
             });
-            await github.rest.issues.addAssignees({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue,
-              assignees: ['brunusansi']
-            });
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue,
-              body: '🤖 Agent analyzed the issue but could not determine changes to make. Flagged for manual review.'
+              body: '\u{1F916} Agent analyzed the issue but could not determine changes to make. Flagged for manual review.'
             });
 
       - name: Remove agent-fix label
