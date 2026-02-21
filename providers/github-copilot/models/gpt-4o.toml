@@ -5,7 +5,7 @@ last_updated = "2024-05-13"
 attachment = true
 reasoning = false
 temperature = true
-knowledge = "2023-09"
+knowledge = "2023-10-01"
 tool_call = true
 open_weights = false
 
