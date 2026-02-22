@@ -93,10 +93,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 Agent is analyzing this issue. Running 5 models in parallel (arena mode)...'
+              body: '🤖 Agent is analyzing this issue. Running 3 models in parallel (arena mode)...'
             });
 
-  # ── Job 2: Arena — 5 models race in parallel ──────────────────
+  # ── Job 2: Arena — 3 models race in parallel ──────────────────
   autofix:
     needs: acknowledge
     if: github.event.label.name == 'agent-fix' && !github.event.issue.pull_request && needs.acknowledge.outputs.skip != 'true'
@@ -108,12 +108,8 @@ jobs:
         model:
           - id: github-copilot/claude-opus-4.6
             name: opus-4.6
-          - id: github-copilot/claude-opus-4.5
-            name: opus-4.5
           - id: github-copilot/claude-sonnet-4.6
             name: sonnet-4.6
-          - id: github-copilot/gpt-5.3-codex
-            name: gpt-5.3-codex
           - id: github-copilot/gemini-3.1-pro-preview
             name: gemini-3.1-pro
 
@@ -349,7 +345,7 @@ jobs:
       - name: Select best patch
         id: select
         run: |
-          PRIORITY="opus-4.6 opus-4.5 sonnet-4.6 gpt-5.3-codex gemini-3.1-pro"
+          PRIORITY="opus-4.6 sonnet-4.6 gemini-3.1-pro"
           SELECTED=""
 
           for model in $PRIORITY; do
@@ -642,5 +638,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 All 5 models attempted this issue but none produced a passing fix. Flagged for manual review.\n\nModels tried: Opus 4.6, Opus 4.5, Sonnet 4.6, GPT-5.3 Codex, Gemini 3.1 Pro'
+              body: '🤖 All 3 models attempted this issue but none produced a passing fix. Flagged for manual review.\n\nModels tried: Opus 4.6, Sonnet 4.6, Gemini 3.1 Pro'
             });
