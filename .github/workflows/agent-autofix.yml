@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   autofix:
-    if: github.event.label.name == 'agent-fix' && !github.event.issue.pull_request
+    if: contains(github.event.issue.labels.*.name, 'agent-fix') && !github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
