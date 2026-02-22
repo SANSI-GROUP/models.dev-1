@@ -75,6 +75,7 @@ export const Model = z
         api: z.string().optional(),
       })
       .optional(),
+    options: z.record(z.string(), z.any()).optional(),
   })
   .strict()
   .refine(
