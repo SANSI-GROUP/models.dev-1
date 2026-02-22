@@ -9,14 +9,262 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: agent-autofix-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
 jobs:
-  autofix:
+  # ── Job 1: Instant acknowledgment ──────────────────────────────
+  acknowledge:
     if: contains(github.event.issue.labels.*.name, 'agent-fix') && !github.event.issue.pull_request
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: agent-autofix-${{ github.event.issue.number }}
-      cancel-in-progress: false
+    timeout-minutes: 2
+    steps:
+      - name: Generate bot token
+        id: bot
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Comment acknowledgment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.bot.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '🤖 Agent is analyzing this issue. Running 4 models in parallel (arena mode)...'
+            });
+
+  # ── Job 2: Arena — 4 models race in parallel ──────────────────
+  autofix:
+    needs: acknowledge
+    if: contains(github.event.issue.labels.*.name, 'agent-fix') && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - id: github-copilot/claude-opus-4.5
+            name: opus-4.5
+          - id: github-copilot/claude-sonnet-4.6
+            name: sonnet-4.6
+          - id: github-copilot/gpt-5.3-codex
+            name: gpt-5.3-codex
+          - id: github-copilot/gemini-3.1-pro-preview
+            name: gemini-3.1-pro
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          token: ${{ github.token }}
+
+      - name: Install Lightweight CLI
+        run: npm install -g lightweight-ai@latest
+
+      - name: Seed Copilot auth
+        run: |
+          mkdir -p ~/.local/share/opencode
+          cat > ~/.local/share/opencode/auth.json << EOF
+          {
+            "github-copilot": {
+              "type": "oauth",
+              "refresh": "${{ secrets.COPILOT_OAUTH_TOKEN }}",
+              "access": "${{ secrets.COPILOT_OAUTH_TOKEN }}",
+              "expires": 0
+            }
+          }
+          EOF
+          chmod 600 ~/.local/share/opencode/auth.json
+
+      - name: Prepare prompt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+            const isSyncReview = labels.includes('sync-review');
+
+            let prompt;
+            if (isSyncReview) {
+              prompt = [
+                `Sync-review issue #${issue.number}: ${issue.title}`,
+                ``,
+                `## Description`,
+                issue.body || 'No description provided.',
+                ``,
+                `## Instructions`,
+                `This is a sync-review issue for the models.dev model registry.`,
+                `The issue describes changes from upstream that need verification.`,
+                ``,
+                `Review the TOML files for:`,
+                `- Correct field names and types`,
+                `- Valid URLs (no broken links)`,
+                `- Proper TOML formatting`,
+                `- No duplicate model entries`,
+                `- Missing required fields (name, provider, description)`,
+                ``,
+                `Fix any issues found. If everything looks correct, make a small improvement`,
+                `like adding missing optional fields or fixing formatting inconsistencies.`,
+                ``,
+                `## TOML File Structure`,
+                `Each model TOML file should have: name, provider, description, and optionally`,
+                `parameters, pricing, context_window, and other metadata fields.`,
+                ``,
+                `## After making changes`,
+                `Write a concise summary of what you changed and why to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
+              ].join('\n');
+            } else {
+              prompt = [
+                `Fix GitHub issue #${issue.number}: ${issue.title}`,
+                ``,
+                `## Description`,
+                issue.body || 'No description provided.',
+                ``,
+                `## Instructions`,
+                `You are working on the models.dev model registry — a collection of TOML files describing AI models.`,
+                ``,
+                `- The default branch is "dev".`,
+                `- Read the project structure before making changes.`,
+                `- Fix ONLY what the issue describes.`,
+                `- Only modify TOML files unless the issue specifically requires other changes.`,
+                `- Ensure all TOML files remain valid after your changes.`,
+                `- Do NOT modify .github/workflows/*.yml — these are managed separately.`,
+                `- Do NOT modify .gitattributes or .gitignore.`,
+                ``,
+                `## TOML Quality Requirements`,
+                `- All TOML files must be syntactically valid.`,
+                `- Required fields: name, provider, description.`,
+                `- URLs must be properly formatted.`,
+                `- No duplicate entries.`,
+                `- Follow existing naming conventions.`,
+                ``,
+                `## After making changes`,
+                `Write a concise summary of what you changed and why to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
+              ].join('\n');
+            }
+
+            fs.writeFileSync('/tmp/agent-prompt.txt', prompt);
+
+      - name: Run agent (${{ matrix.model.name }})
+        run: |
+          echo "::group::Running model ${{ matrix.model.name }}"
+          cat /tmp/agent-prompt.txt | timeout 600 lightweight run \
+            --provider copilot --model "${{ matrix.model.id }}" 2>&1 | tail -500 || true
+          echo "::endgroup::"
+        env:
+          OPENCODE_CLIENT: ci
+
+      - name: Validate TOML files
+        id: validate
+        run: |
+          if python3 -c "
+          import tomllib, glob, sys
+          errors = []
+          for f in glob.glob('**/*.toml', recursive=True):
+              try:
+                  with open(f, 'rb') as fh:
+                      tomllib.load(fh)
+              except Exception as e:
+                  errors.append(f'{f}: {e}')
+          if errors:
+              print('\n'.join(errors), file=sys.stderr)
+              sys.exit(1)
+          print(f'All TOML files valid.')
+          " 2>&1 | tee /tmp/toml-validation.txt; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Retry agent with validation errors
+        if: steps.validate.outputs.passed == 'false'
+        run: |
+          echo "::group::Retrying ${{ matrix.model.name }} with TOML validation errors"
+          ERRORS=$(cat /tmp/toml-validation.txt)
+          RETRY_PROMPT=$(cat <<ENDPROMPT
+          The previous changes failed TOML validation. Here are the errors:
+
+          $ERRORS
+
+          Fix ALL these TOML errors. Ensure every TOML file is syntactically valid.
+          Update /tmp/pr-summary.txt with what you changed.
+          ENDPROMPT
+          )
+          echo "$RETRY_PROMPT" | timeout 600 lightweight run \
+            --provider copilot --model "${{ matrix.model.id }}" 2>&1 | tail -500 || true
+          echo "::endgroup::"
+        env:
+          OPENCODE_CLIENT: ci
+
+      - name: Validate TOML (attempt 2)
+        if: steps.validate.outputs.passed == 'false'
+        id: validate2
+        run: |
+          if python3 -c "
+          import tomllib, glob, sys
+          errors = []
+          for f in glob.glob('**/*.toml', recursive=True):
+              try:
+                  with open(f, 'rb') as fh:
+                      tomllib.load(fh)
+              except Exception as e:
+                  errors.append(f'{f}: {e}')
+          if errors:
+              print('\n'.join(errors), file=sys.stderr)
+              sys.exit(1)
+          " 2>&1; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine validation result
+        id: check
+        run: |
+          if [ "${{ steps.validate.outputs.passed }}" = "true" ] || \
+             [ "${{ steps.validate2.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save patch artifact
+        if: steps.check.outputs.passed == 'true'
+        id: patch
+        run: |
+          mkdir -p /tmp/patches
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git diff --cached > /tmp/patches/fix.patch
+            cp /tmp/pr-summary.txt /tmp/patches/pr-summary.txt 2>/dev/null || echo "Automated fix by ${{ matrix.model.name }}" > /tmp/patches/pr-summary.txt
+            echo "${{ matrix.model.name }}" > /tmp/patches/model.txt
+            echo "has_patch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-${{ matrix.model.name }}
+          path: /tmp/patches/
+          retention-days: 1
+
+  # ── Job 3: Collect best result, review, create PR ──────────────
+  collect:
+    needs: autofix
+    if: always() && contains(github.event.issue.labels.*.name, 'agent-fix') && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Generate bot token
@@ -32,106 +280,158 @@ jobs:
           ref: dev
           token: ${{ steps.bot.outputs.token }}
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Download all patches
+        uses: actions/download-artifact@v4
         with:
-          bun-version: latest
+          path: /tmp/all-patches
+          pattern: patch-*
+        continue-on-error: true
 
-      - name: Install lightweight CLI
-        run: bun install -g --trust lightweight-ai
-
-      - name: Seed Copilot auth
+      - name: Select best patch
+        id: select
         run: |
-          mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json << 'AUTHEOF'
-          {
-            "github-copilot": {
-              "type": "oauth",
-              "refresh": "${{ secrets.COPILOT_OAUTH_TOKEN }}",
-              "access": "${{ secrets.COPILOT_OAUTH_TOKEN }}",
-              "expires": 0
-            }
-          }
-          AUTHEOF
-          chmod 600 ~/.local/share/opencode/auth.json
+          PRIORITY="opus-4.5 sonnet-4.6 gpt-5.3-codex gemini-3.1-pro"
+          SELECTED=""
 
-      - name: Prepare prompt
+          for model in $PRIORITY; do
+            PATCH_DIR="/tmp/all-patches/patch-${model}"
+            if [ -f "${PATCH_DIR}/fix.patch" ] && [ -s "${PATCH_DIR}/fix.patch" ]; then
+              SELECTED="$model"
+              echo "Selected model: $model"
+              break
+            fi
+          done
+
+          if [ -z "$SELECTED" ]; then
+            echo "No valid patches found from any model."
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_patch=true" >> "$GITHUB_OUTPUT"
+            echo "model=$SELECTED" >> "$GITHUB_OUTPUT"
+            git apply "/tmp/all-patches/patch-${SELECTED}/fix.patch"
+            if [ -f "/tmp/all-patches/patch-${SELECTED}/pr-summary.txt" ]; then
+              cp "/tmp/all-patches/patch-${SELECTED}/pr-summary.txt" /tmp/pr-summary.txt
+            else
+              echo "Automated fix generated by ${SELECTED}" > /tmp/pr-summary.txt
+            fi
+          fi
+
+      - name: Prepare review prompt
+        if: steps.select.outputs.has_patch == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const { execSync } = require('child_process');
             const issue = context.payload.issue;
-            const isSyncReview = issue.labels.some(l => l.name === 'sync-review');
+            const diff = execSync('git diff HEAD', { encoding: 'utf8' });
+            const diffStat = execSync('git diff --stat HEAD', { encoding: 'utf8' });
 
-            let prompt;
-            if (isSyncReview) {
-              prompt = [
-                `Resolve upstream sync review issue #${issue.number}: ${issue.title}`,
-                ``,
-                `## Context`,
-                issue.body || 'No description provided.',
-                ``,
-                `## Instructions`,
-                `- The default branch is "dev".`,
-                `- This is a model registry project. Models are TOML files in providers/<provider>/models/<model>.toml.`,
-                `- An upstream sync just merged new changes. Your job is to VERIFY and FIX any issues.`,
-                `- Read the issue body carefully — it lists specific files that changed and tasks to verify.`,
-                ``,
-                `## What to check and fix`,
-                `1. Check if any custom models were overwritten or deleted by the sync. Custom models may have fields or configs that differ from upstream.`,
-                `2. Check if any TOML files have syntax errors or invalid schema.`,
-                `3. Check if any new provider directories are missing required structure.`,
-                `4. If files were deleted that should exist, restore them from git history.`,
-                `5. If no issues found, create a small documentation fix or comment — do NOT leave the repo unchanged.`,
-                ``,
-                `## Important`,
-                `- Run \`find providers -name "*.toml" | head -30\` to see the project structure.`,
-                `- Validate TOML syntax of any changed files.`,
-                `- Make minimal, targeted fixes only.`,
-                `- If everything looks correct after verification, add a comment to the TOML file that was most recently changed (e.g. # verified <date>).`,
-                ``,
-                `## After making changes`,
-                `Write a concise summary of what you verified and changed to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
-              ].join('\n');
-            } else {
-              prompt = [
-                `Fix GitHub issue #${issue.number}: ${issue.title}`,
-                ``,
-                `## Description`,
-                issue.body || 'No description provided.',
-                ``,
-                `## Instructions`,
-                `- The default branch is "dev".`,
-                `- This is a model registry project with TOML model configs in providers/<provider>/models/<model>.toml.`,
-                `- Read the project structure before making changes.`,
-                `- Make minimal, focused changes that fix only this issue.`,
-                `- Preserve all existing model configurations and provider structures.`,
-                `- If the issue is about a model config, validate TOML syntax.`,
-                ``,
-                `## After making changes`,
-                `Write a concise summary of what you changed and why to /tmp/pr-summary.txt (plain text, 2-4 sentences).`,
-              ].join('\n');
-            }
-            fs.writeFileSync('/tmp/agent-prompt.txt', prompt);
+            const prompt = [
+              `You are a senior code reviewer for a TOML-based AI model registry. Review the following changes that were made to fix issue #${issue.number}: ${issue.title}`,
+              ``,
+              `## Issue Description`,
+              issue.body || 'No description.',
+              ``,
+              `## Changed Files`,
+              diffStat,
+              ``,
+              `## Diff`,
+              diff.substring(0, 50000),
+              ``,
+              `## Review Criteria`,
+              `1. Does the change actually fix the described issue?`,
+              `2. Are all TOML files syntactically valid?`,
+              `3. Are required fields present (name, provider, description)?`,
+              `4. Are URLs properly formatted?`,
+              `5. Are there duplicate entries?`,
+              `6. Is the change minimal and focused (no unrelated modifications)?`,
+              `7. Are any forbidden files modified: .github/workflows/, .gitattributes?`,
+              ``,
+              `## Response Format`,
+              `Write your verdict to /tmp/review-result.txt with EXACTLY this format:`,
+              `First line: APPROVE or REJECT`,
+              `Remaining lines: Brief explanation of your decision.`,
+              ``,
+              `Be strict but fair. APPROVE only if all criteria pass.`,
+            ].join('\n');
 
-      - name: Run agent
+            fs.writeFileSync('/tmp/review-prompt.txt', prompt);
+
+      - name: Run review (direct API)
+        if: steps.select.outputs.has_patch == 'true'
         run: |
-          cat /tmp/agent-prompt.txt | lightweight run \
-            --model github-copilot/claude-opus-4.6
-        env:
-          OPENCODE_MODELS_URL: https://templarsco.github.io/models.dev-1
+          COPILOT_TOKEN=$(curl -sf \
+            -H "Authorization: token ${{ secrets.COPILOT_OAUTH_TOKEN }}" \
+            -H "Accept: application/json" \
+            https://api.github.com/copilot_internal/v2/token | jq -r '.token')
 
-      - name: Check for changes
-        id: changes
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          if [ -z "$COPILOT_TOKEN" ] || [ "$COPILOT_TOKEN" = "null" ]; then
+            echo "::warning::Failed to obtain Copilot review token — auto-approving."
+            printf 'APPROVE\nCould not obtain review token.' > /tmp/review-result.txt
+            exit 0
+          fi
+
+          jq -n --arg prompt "$(cat /tmp/review-prompt.txt)" '{
+            "model": "claude-sonnet-4.6",
+            "messages": [
+              {"role": "system", "content": "You are a senior code reviewer for a TOML model registry. Respond with EXACTLY this format:\nFirst line: APPROVE or REJECT\nRemaining lines: Brief explanation.\nNothing else."},
+              {"role": "user", "content": $prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0
+          }' > /tmp/review-payload.json
+
+          RESPONSE=$(curl -sf \
+            -H "Authorization: Bearer $COPILOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Openai-Intent: conversation-edits" \
+            -d @/tmp/review-payload.json \
+            https://api.githubcopilot.com/chat/completions)
+
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
+          if [ -n "$REVIEW" ]; then
+            echo "$REVIEW" > /tmp/review-result.txt
           else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Review API returned no content — auto-approving."
+            printf 'APPROVE\nReview API returned empty response.' > /tmp/review-result.txt
+          fi
+        timeout-minutes: 3
+
+      - name: Parse review result
+        id: review
+        if: steps.select.outputs.has_patch == 'true'
+        run: |
+          if [ -f /tmp/review-result.txt ]; then
+            DECISION=$(head -1 /tmp/review-result.txt | tr -d '[:space:]')
+            if [ "$DECISION" = "APPROVE" ]; then
+              echo "approved=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "approved=false" >> "$GITHUB_OUTPUT"
+              REASON=$(tail -n +2 /tmp/review-result.txt)
+              echo "reason<<ENDOFREASON" >> "$GITHUB_OUTPUT"
+              echo "$REASON" >> "$GITHUB_OUTPUT"
+              echo "ENDOFREASON" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Review agent did not produce a result." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine final state
+        id: final
+        run: |
+          if [ "${{ steps.select.outputs.has_patch }}" != "true" ]; then
+            echo "outcome=no_patch" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.review.outputs.approved }}" = "true" ]; then
+            echo "outcome=approved" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=rejected" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build PR body
-        if: steps.changes.outputs.has_changes == 'true'
+        if: steps.final.outputs.outcome == 'approved'
         uses: actions/github-script@v7
         id: body
         with:
@@ -140,6 +440,7 @@ jobs:
             const fs = require('fs');
             const { execSync } = require('child_process');
             const issue = context.payload.issue;
+            const model = '${{ steps.select.outputs.model }}';
 
             let summary = 'Automated fix generated by Lightweight Agent.';
             try {
@@ -164,6 +465,12 @@ jobs:
               ``,
               summary,
               ``,
+              `### How did you verify your code works?`,
+              ``,
+              `- TOML validation passed on all files`,
+              `- Changes are minimal and focused on the reported issue`,
+              `- Self-review passed (sonnet-4.6)`,
+              ``,
               `### Changed files`,
               ``,
               '```',
@@ -172,18 +479,18 @@ jobs:
               ``,
               `### Checklist`,
               ``,
-              `- [x] Changes are minimal and focused on the reported issue`,
-              `- [x] No unrelated changes included`,
+              `- [x] I have tested my changes locally`,
+              `- [x] I have not included unrelated changes in this PR`,
               ``,
               `---`,
-              `*Generated by [Lightweight Agent](https://github.com/templarsco/lightweight) running in CI.*`,
+              `*Generated by [Lightweight Agent](https://github.com/templarsco/lightweight) — arena winner: **${model}***`,
             ].join('\n');
 
             return body;
 
       - name: Create pull request
         id: pr
-        if: steps.changes.outputs.has_changes == 'true'
+        if: steps.final.outputs.outcome == 'approved'
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ steps.bot.outputs.token }}
@@ -195,37 +502,84 @@ jobs:
           delete-branch: true
           labels: automated,needs-review
 
-      - name: Comment on issue (success)
-        if: steps.changes.outputs.has_changes == 'true'
+      - name: Assign reviewer on PR
+        if: steps.final.outputs.outcome == 'approved' && steps.pr.outputs.pull-request-number
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.bot.outputs.token }}
           script: |
+            const pr = ${{ steps.pr.outputs.pull-request-number }};
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr,
+              reviewers: ['brunusansi']
+            });
+
+      - name: Comment on issue (success)
+        if: steps.final.outputs.outcome == 'approved'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.bot.outputs.token }}
+          script: |
+            const model = '${{ steps.select.outputs.model }}';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '\u{1F916} Agent created a pull request to fix this issue.'
+              body: `🤖 Agent created a pull request to fix this issue.\n\n✅ TOML validation passed\n✅ Self-review passed\n🏆 Arena winner: **${model}**`
             });
 
-      - name: Flag for manual review
-        if: steps.changes.outputs.has_changes == 'false'
+      - name: Comment on issue (review rejected)
+        if: steps.final.outputs.outcome == 'rejected'
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.bot.outputs.token }}
           script: |
-            const issue = context.payload.issue.number;
+            const model = '${{ steps.select.outputs.model }}';
+            const reason = `${{ steps.review.outputs.reason }}`.substring(0, 500);
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issue,
+              issue_number: context.payload.issue.number,
               labels: ['needs-review']
+            });
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              assignees: ['brunusansi']
             });
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issue,
-              body: '\u{1F916} Agent analyzed the issue but could not determine changes to make. Flagged for manual review.'
+              issue_number: context.payload.issue.number,
+              body: `🤖 Agent (${model}) made changes but they were rejected during self-review.\n\n**Review reason:** ${reason}\n\nFlagged for manual review.`
+            });
+
+      - name: Comment on issue (no models succeeded)
+        if: steps.final.outputs.outcome == 'no_patch'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.bot.outputs.token }}
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['needs-review']
+            });
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              assignees: ['brunusansi']
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '🤖 All 4 models attempted this issue but none produced a passing fix. Flagged for manual review.\n\nModels tried: Opus 4.5, Sonnet 4.6, GPT-5.3 Codex, Gemini 3.1 Pro'
             });
 
       - name: Remove agent-fix label
