@@ -22,3 +22,6 @@ output = 128_000
 [modalities]
 input = ["text", "image", "pdf"]
 output = ["text"]
+
+[options]
+reasoningEffort = "xhigh"
