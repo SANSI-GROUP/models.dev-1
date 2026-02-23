@@ -73,7 +73,7 @@ jobs:
             });
             const recent = comments.reverse().find(c =>
               c.body.includes('Agent created a pull request') &&
-              (Date.now() - new Date(c.created_at).getTime()) < 600000
+              (Date.now() - new Date(c.created_at).getTime()) < 300000
             );
             if (recent) {
               core.info('Agent already processed this issue recently — skipping');
@@ -93,10 +93,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 Agent is analyzing this issue. Running 3 models in parallel (arena mode)...'
+              body: '🤖 Agent is analyzing this issue. Running 2 models in parallel (arena mode)...'
             });
 
-  # ── Job 2: Arena — 3 models race in parallel ──────────────────
+  # ── Job 2: Arena — 2 models race in parallel ──────────────────
   autofix:
     needs: acknowledge
     if: github.event.label.name == 'agent-fix' && !github.event.issue.pull_request && needs.acknowledge.outputs.skip != 'true'
@@ -110,8 +110,6 @@ jobs:
             name: opus-4.6
           - id: github-copilot/claude-sonnet-4.6
             name: sonnet-4.6
-          - id: github-copilot/gemini-3.1-pro-preview
-            name: gemini-3.1-pro
 
     steps:
       - name: Checkout
@@ -211,7 +209,7 @@ jobs:
       - name: Run agent (${{ matrix.model.name }})
         run: |
           echo "::group::Running model ${{ matrix.model.name }}"
-          cat /tmp/agent-prompt.txt | timeout 600 lightweight run \
+          cat /tmp/agent-prompt.txt | timeout 600 lightweight run --variant max \
             --provider copilot --model "${{ matrix.model.id }}" 2>&1 | tail -500 || true
           echo "::endgroup::"
         env:
@@ -253,7 +251,7 @@ jobs:
           Update /tmp/pr-summary.txt with what you changed.
           ENDPROMPT
           )
-          echo "$RETRY_PROMPT" | timeout 600 lightweight run \
+          echo "$RETRY_PROMPT" | timeout 600 lightweight run --variant max \
             --provider copilot --model "${{ matrix.model.id }}" 2>&1 | tail -500 || true
           echo "::endgroup::"
         env:
@@ -345,7 +343,7 @@ jobs:
       - name: Select best patch
         id: select
         run: |
-          PRIORITY="opus-4.6 sonnet-4.6 gemini-3.1-pro"
+          PRIORITY="opus-4.6 sonnet-4.6"
           SELECTED=""
 
           for model in $PRIORITY; do
@@ -638,5 +636,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 All 3 models attempted this issue but none produced a passing fix. Flagged for manual review.\n\nModels tried: Opus 4.6, Sonnet 4.6, Gemini 3.1 Pro'
+              body: '🤖 Both models attempted this issue but neither produced a passing fix. Flagged for manual review.\n\nModels tried: Opus 4.6, Sonnet 4.6'
             });
