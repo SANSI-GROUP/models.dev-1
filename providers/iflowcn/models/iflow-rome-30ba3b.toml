@@ -1,11 +1,11 @@
-name = "Qwen3-Max-Preview"
-family = "qwen"
+name = "iFlow-ROME-30BA3B"
+family = "iflow"
 release_date = "2025-01-01"
-last_updated = "2025-01-01"
+last_updated = "2025-02-23"
 attachment = false
-reasoning = false
+reasoning = true
 temperature = true
-knowledge = "2024-12"
+knowledge = "2025-01"
 tool_call = true
 open_weights = false
 
@@ -14,7 +14,7 @@ input = 0.0
 output = 0.0
 
 [limit]
-context = 256_000
+context = 128_000
 output = 32_000
 
 [modalities]

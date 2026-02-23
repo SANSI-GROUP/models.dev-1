@@ -1,7 +1,7 @@
-name = "GLM-4.6"
+name = "GLM-5"
 family = "glm"
-release_date = "2024-12-01"
-last_updated = "2025-11-13"
+release_date = "2025-01-01"
+last_updated = "2025-02-23"
 attachment = false
 reasoning = true
 temperature = true
