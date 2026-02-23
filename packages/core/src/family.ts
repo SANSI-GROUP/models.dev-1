@@ -107,6 +107,7 @@ export const ModelFamilyValues = [
 
   // Hunyuan
   "hunyuan",
+  "iflow",
 
   // Yi
   "yi",
