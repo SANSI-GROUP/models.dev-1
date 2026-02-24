@@ -17,7 +17,7 @@ jobs:
   # ── Job 1: Validate issue ─────────────────────────────────────
   validate:
     if: >-
-      github.event.label.name == 'agent-fix' &&
+      contains(github.event.issue.labels.*.name, 'agent-fix') &&
       !github.event.issue.pull_request &&
       github.repository == 'templarsco/models.dev-1'
     runs-on: ubuntu-latest
