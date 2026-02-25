@@ -92,10 +92,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
-              body: '🤖 Agent is analyzing this issue using a 4-model team:\n\n1. 🔬 **Codex 5.3** — Research & analysis\n2. 🛠️ **Opus 4.6** — Implementation\n3. ⚡ **Opus 4.6 Fast** — Validation\n4. 📝 **Sonnet 4.6** — Code review'
+              body: '🤖 Agent is analyzing this issue using a 4-model team:\n\n1. 🔬 **GPT-5.2** — Research & analysis\n2. 🛠️ **Opus 4.5** — Implementation\n3. ⚡ **Sonnet 4.5** — Validation\n4. 📝 **Sonnet 4.5** — Code review'
             });
 
-  # ── Job 2: Research with Codex 5.3 ────────────────────────────
+  # ── Job 2: Research with GPT-5.2 ────────────────────────────
   research:
     needs: validate
     if: needs.validate.outputs.proceed == 'true'
@@ -110,7 +110,7 @@ jobs:
           ref: dev
           token: ${{ github.token }}
 
-      - name: Analyze issue with Codex 5.3
+      - name: Analyze issue with GPT-5.2
         id: analyze
         uses: actions/github-script@v7
         env:
@@ -139,7 +139,7 @@ jobs:
             } catch {}
 
             const payload = JSON.stringify({
-              model: "gpt-5.3-codex",
+              model: "gpt-5.2",
               messages: [
                 {
                   role: "system",
@@ -169,7 +169,7 @@ jobs:
             core.setOutput('analysis', truncated);
             core.info('Research complete');
 
-  # ── Job 3: Implement with Opus 4.6 ────────────────────────────
+  # ── Job 3: Implement with Opus 4.5 ────────────────────────────
   implement:
     needs: [validate, research]
     if: needs.validate.outputs.proceed == 'true'
@@ -233,7 +233,7 @@ jobs:
               prompt = [
                 `Fix GitHub issue #${issue.number}: ${issue.title}`,
                 ``,
-                `## Research Analysis (from Codex 5.3)`,
+                `## Research Analysis (from GPT-5.2)`,
                 analysis,
                 ``,
                 `## Issue Description`,
@@ -253,10 +253,10 @@ jobs:
 
             fs.writeFileSync('/tmp/agent-prompt.txt', prompt);
 
-      - name: Run coding agent (Opus 4.6)
+      - name: Run coding agent (Opus 4.5)
         run: |
           cat /tmp/agent-prompt.txt | timeout 600 lightweight run --variant max \
-            --provider copilot --model "github-copilot/claude-opus-4.6" 2>&1 | tail -500 || true
+            --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
         env:
           OPENCODE_CLIENT: ci
 
@@ -314,7 +314,7 @@ jobs:
         run: |
           ERRORS=$(cat /tmp/validation-errors.txt)
           cat <<ENDPROMPT | timeout 600 lightweight run --variant max \
-            --provider copilot --model "github-copilot/claude-opus-4.6" 2>&1 | tail -500 || true
+            --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
           The previous changes failed validation. Fix these errors:
 
           $ERRORS
@@ -331,7 +331,7 @@ jobs:
             mkdir -p /tmp/patches
             git add -A
             git diff --cached > /tmp/patches/fix.patch
-            cp /tmp/pr-summary.txt /tmp/patches/pr-summary.txt 2>/dev/null || echo "Automated fix by Opus 4.6" > /tmp/patches/pr-summary.txt
+            cp /tmp/pr-summary.txt /tmp/patches/pr-summary.txt 2>/dev/null || echo "Automated fix by Opus 4.5" > /tmp/patches/pr-summary.txt
             echo "has_patch=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_patch=false" >> "$GITHUB_OUTPUT"
@@ -400,7 +400,7 @@ jobs:
             echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Quick validation (Opus 4.6 Fast)
+      - name: Quick validation (Sonnet 4.5)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true'
         id: fast_check
         run: |
@@ -409,7 +409,7 @@ jobs:
 
           SYSTEM_PROMPT="You are a fast validation agent for a model registry (JSON/TOML configs). Check for logic errors, security issues, and obvious bugs. Respond with: Line 1: PASS or FAIL. Line 2+: Brief explanation."
           jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "${{ github.event.issue.title }}" --arg system "$SYSTEM_PROMPT" '{
-            "model": "claude-opus-4.6-fast",
+            "model": "claude-sonnet-4.5",
             "messages": [
               {"role": "system", "content": $system},
               {"role": "user", "content": ("Validate this fix for issue: " + $issue + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:30000]))}
@@ -446,7 +446,7 @@ jobs:
           fi
         timeout-minutes: 3
 
-      - name: Code review (Sonnet 4.6)
+      - name: Code review (Sonnet 4.5)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true' && steps.fast_check.outputs.passed != 'false'
         id: review
         run: |
@@ -463,7 +463,7 @@ jobs:
             --arg title "${{ github.event.issue.title }}" \
             --arg body "$ISSUE_BODY" \
             --arg system "$REVIEW_SYSTEM" '{
-            "model": "claude-sonnet-4.6",
+            "model": "claude-sonnet-4.5",
             "messages": [
               {"role": "system", "content": $system},
               {"role": "user", "content": ("Review this fix for issue: " + $title + "\n\nIssue description:\n" + $body + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:50000]) + "\n\nCheck:\n1. Does it fix the issue?\n2. Are config files valid?\n3. Are changes minimal and focused?\n4. Any forbidden files modified (.github/workflows/)?")}
@@ -542,10 +542,10 @@ jobs:
 
           | Step | Model | Role |
           |------|-------|------|
-          | 🔬 Research | Codex 5.3 | Issue analysis & fix planning |
-          | 🛠️ Implement | Opus 4.6 | Code changes |
-          | ⚡ Validate | Opus 4.6 Fast | Logic & security check |
-          | 📝 Review | Sonnet 4.6 | Final code quality review |
+          | 🔬 Research | GPT-5.2 | Issue analysis & fix planning |
+          | 🛠️ Implement | Opus 4.5 | Code changes |
+          | ⚡ Validate | Sonnet 4.5 | Logic & security check |
+          | 📝 Review | Sonnet 4.5 | Final code quality review |
 
           ### Changed files
 
@@ -603,10 +603,10 @@ jobs:
                 '',
                 '| Step | Model | Status |',
                 '|------|-------|--------|',
-                '| 🔬 Research | Codex 5.3 | ✅ |',
-                '| 🛠️ Implement | Opus 4.6 | ✅ |',
-                '| ⚡ Validate | Opus 4.6 Fast | ✅ |',
-                '| 📝 Review | Sonnet 4.6 | ✅ |',
+                '| 🔬 Research | GPT-5.2 | ✅ |',
+                '| 🛠️ Implement | Opus 4.5 | ✅ |',
+                '| ⚡ Validate | Sonnet 4.5 | ✅ |',
+                '| 📝 Review | Sonnet 4.5 | ✅ |',
               ].join('\n')
             });
 
@@ -618,7 +618,7 @@ jobs:
           script: |
             const outcome = '${{ steps.outcome.outputs.result }}';
             const reason = outcome === 'fast_check_failed'
-              ? 'Fast validation (Opus 4.6 Fast) found issues.'
+              ? 'Fast validation (Sonnet 4.5) found issues.'
               : `${{ steps.review.outputs.reason }}`.substring(0, 500);
 
             await github.rest.issues.addAssignees({
@@ -650,5 +650,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 Agent could not produce a valid fix. Flagged for manual review.\n\nModels used: Codex 5.3, Opus 4.6, Opus 4.6 Fast, Sonnet 4.6'
+              body: '🤖 Agent could not produce a valid fix. Flagged for manual review.\n\nModels used: GPT-5.2, Opus 4.5, Sonnet 4.5, Sonnet 4.5'
             });
