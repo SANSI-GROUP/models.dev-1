@@ -407,10 +407,11 @@ jobs:
           DIFF=$(git diff HEAD)
           DIFF_STAT=$(git diff --stat HEAD)
 
-          jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "${{ github.event.issue.title }}" '{
+          SYSTEM_PROMPT="You are a fast validation agent for a model registry (JSON/TOML configs). Check for logic errors, security issues, and obvious bugs. Respond with: Line 1: PASS or FAIL. Line 2+: Brief explanation."
+          jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "${{ github.event.issue.title }}" --arg system "$SYSTEM_PROMPT" '{
             "model": "claude-opus-4.6-fast",
             "messages": [
-              {"role": "system", "content": "You are a fast validation agent. Check for logic errors, security issues, and obvious bugs. Respond with:\nLine 1: PASS or FAIL\nLine 2+: Brief explanation."},
+              {"role": "system", "content": $system},
               {"role": "user", "content": ("Validate this fix for issue: " + $issue + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:30000]))}
             ],
             "max_tokens": 500,
@@ -455,15 +456,16 @@ jobs:
           ${{ github.event.issue.body }}
           ENDISSUE
           )
-
+          REVIEW_SYSTEM="You are a senior code reviewer for a model registry (JSON/TOML configs). Review changes for correctness, completeness, and quality. Respond with EXACTLY: Line 1: APPROVE or REJECT. Line 2+: Brief explanation. Nothing else."
           jq -n \
             --arg diff "$DIFF" \
             --arg stat "$DIFF_STAT" \
             --arg title "${{ github.event.issue.title }}" \
-            --arg body "$ISSUE_BODY" '{
+            --arg body "$ISSUE_BODY" \
+            --arg system "$REVIEW_SYSTEM" '{
             "model": "claude-sonnet-4.6",
             "messages": [
-              {"role": "system", "content": "You are a senior code reviewer for a model registry (JSON/TOML configs). Review changes for correctness, completeness, and quality.\n\nRespond with EXACTLY:\nLine 1: APPROVE or REJECT\nLine 2+: Brief explanation.\nNothing else."},
+              {"role": "system", "content": $system},
               {"role": "user", "content": ("Review this fix for issue: " + $title + "\n\nIssue description:\n" + $body + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:50000]) + "\n\nCheck:\n1. Does it fix the issue?\n2. Are config files valid?\n3. Are changes minimal and focused?\n4. Any forbidden files modified (.github/workflows/)?")}
             ],
             "max_tokens": 1000,
