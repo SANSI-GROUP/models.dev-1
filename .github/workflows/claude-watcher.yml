@@ -59,7 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          for label in sync-review automated; do
+          for label in sync-review automated agent-fix; do
             gh label create "$label" --repo "${{ github.repository }}" --force --color "ededed" 2>/dev/null || true
           done
 
@@ -136,3 +136,16 @@ jobs:
           echo "Created issue #${ISSUE_NUM} and assigned Copilot (Claude): ${ISSUE_URL}"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Add agent-fix label to trigger autofix pipeline
+        if: steps.changes.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # Extract issue number from previous step output
+          LATEST_ISSUE=$(gh issue list --repo "${{ github.repository }}" --label "sync-review" --state open --limit 1 --json number --jq '.[0].number')
+          if [ -n "$LATEST_ISSUE" ]; then
+            # Add agent-fix label separately to fire 'issues: labeled' event
+            gh issue edit "$LATEST_ISSUE" --repo "${{ github.repository }}" --add-label "agent-fix"
+            echo "Added agent-fix label to issue #${LATEST_ISSUE} to trigger autofix pipeline"
+          fi
