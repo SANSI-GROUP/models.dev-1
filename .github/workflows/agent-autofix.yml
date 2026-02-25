@@ -92,10 +92,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
-              body: '🤖 Agent is analyzing this issue using a 4-model team:\n\n1. 🔬 **GPT-5.2** — Research & analysis\n2. 🛠️ **Opus 4.5** — Implementation\n3. ⚡ **Sonnet 4.5** — Validation\n4. 📝 **Sonnet 4.5** — Code review'
+              body: '🤖 Agent is analyzing this issue using a 5-model team:\n\n1. 🔬 **Gemini 3.1 Pro** — Research & analysis\n2. 🧠 **Sonnet 4.6** — Architecture planning\n3. 🛠️ **Opus 4.6** — Implementation\n4. ⚡ **GPT-5.3 Codex** — Validation\n5. 📝 **Opus 4.6 Fast** — Code review'
             });
 
-  # ── Job 2: Research with GPT-5.2 ────────────────────────────
+  # ── Job 2: Research with Gemini 3.1 Pro ────────────────────────────
   research:
     needs: validate
     if: needs.validate.outputs.proceed == 'true'
@@ -110,7 +110,7 @@ jobs:
           ref: dev
           token: ${{ github.token }}
 
-      - name: Analyze issue with GPT-5.2
+      - name: Analyze issue with Gemini 3.1 Pro
         id: analyze
         uses: actions/github-script@v7
         env:
@@ -139,7 +139,7 @@ jobs:
             } catch {}
 
             const payload = JSON.stringify({
-              model: "gpt-5.2",
+              model: "gemini-3.1-pro",
               messages: [
                 {
                   role: "system",
@@ -169,9 +169,80 @@ jobs:
             core.setOutput('analysis', truncated);
             core.info('Research complete');
 
-  # ── Job 3: Implement with Opus 4.5 ────────────────────────────
-  implement:
+  # ── Job 3: Plan approach with Sonnet 4.6 ─────────────────────────
+  plan:
     needs: [validate, research]
+    if: needs.validate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.sonnet.outputs.plan }}
+    steps:
+      - name: Architecture planning (Sonnet 4.6)
+        id: sonnet
+        timeout-minutes: 3
+        env:
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          ISSUE_TITLE: ${{ needs.validate.outputs.issue_title }}
+          ISSUE_BODY: ${{ needs.validate.outputs.issue_body }}
+          RESEARCH_BRIEF: ${{ needs.research.outputs.analysis }}
+        run: |
+          COPILOT_TOKEN=""
+          if [ -n "${COPILOT_OAUTH_TOKEN:-}" ]; then
+            COPILOT_TOKEN=$(curl -s \
+              -H "Authorization: token $COPILOT_OAUTH_TOKEN" \
+              -H "Accept: application/json" \
+              -H "User-Agent: GitHubCopilotChat/0.24.2026021001" \
+              https://api.github.com/copilot_internal/v2/token 2>/dev/null | jq -r '.token // empty' 2>/dev/null) || true
+          fi
+
+          if [ -z "$COPILOT_TOKEN" ] || [ "$COPILOT_TOKEN" = "null" ]; then
+            echo "::warning::Sonnet token unavailable — forwarding research brief as plan."
+            EOF_MARKER=$(openssl rand -hex 8)
+            echo "plan<<$EOF_MARKER" >> "$GITHUB_OUTPUT"
+            echo "$RESEARCH_BRIEF" >> "$GITHUB_OUTPUT"
+            echo "$EOF_MARKER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ISSUE_TEXT=$(printf '%s\n\n%s' "$ISSUE_TITLE" "$ISSUE_BODY" | head -c 6000)
+          jq -n --arg issue "$ISSUE_TEXT" --arg brief "$RESEARCH_BRIEF" '{
+            "model": "claude-sonnet-4.6",
+            "messages": [
+              {"role": "system", "content": "You are a senior software architect planning a precise fix for a JSON/TOML model registry. Given the issue and research brief, produce a structured IMPLEMENTATION PLAN:\n\n1. FILES TO MODIFY: Exact file paths\n2. CHANGES PER FILE: What to add/modify/remove and why\n3. DEPENDENCY ORDER: Which changes must happen first\n4. VALIDATION: How to ensure TOML/JSON remains valid\n5. TESTING STRATEGY: What to verify after changes\n6. RISK MITIGATION: What could go wrong and how to prevent it\n\nBe surgical. Reference actual file paths from the research brief."},
+              {"role": "user", "content": ("## Bug Report\n" + $issue + "\n\n## Research Brief\n" + $brief)}
+            ],
+            "max_tokens": 2000,
+            "temperature": 0
+          }' > /tmp/plan-payload.json
+
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer $COPILOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: GitHubCopilotChat/0.24.2026021001" \
+            -H "Editor-Version: vscode/1.97.0" \
+            -H "Editor-Plugin-Version: copilot-chat/0.24.2026021001" \
+            -H "Openai-Organization: github-copilot" \
+            -H "Openai-Intent: conversation-edits" \
+            -H "Copilot-Integration-Id: vscode-chat" \
+            -d @/tmp/plan-payload.json \
+            https://api.githubcopilot.com/chat/completions) || true
+
+          PLAN=$(echo "${RESPONSE:-}" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+
+          if [ -z "$PLAN" ]; then
+            echo "::warning::Sonnet returned empty — using research brief as plan."
+            PLAN="$RESEARCH_BRIEF"
+          fi
+
+          TRUNCATED=$(echo "$PLAN" | head -c 8000)
+          EOF_MARKER=$(openssl rand -hex 8)
+          echo "plan<<$EOF_MARKER" >> "$GITHUB_OUTPUT"
+          echo "$TRUNCATED" >> "$GITHUB_OUTPUT"
+          echo "$EOF_MARKER" >> "$GITHUB_OUTPUT"
+  # ── Job 4: Implement with Opus 4.6 ────────────────────────────
+  implement:
+    needs: [validate, research, plan]
     if: needs.validate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -222,6 +293,7 @@ jobs:
             const fs = require('fs');
             const issue = context.payload.issue;
             const analysis = `${{ needs.research.outputs.analysis }}`;
+            const plan = `${{ needs.plan.outputs.plan }}`;
             const labels = issue.labels.map(l => l.name);
             const isSyncReview = labels.includes('sync-review');
 
@@ -233,6 +305,7 @@ jobs:
                 `## Research Analysis`,
                 analysis,
                 ``,
+                ...(plan ? [`## Implementation Plan (from Sonnet 4.6)`, `Follow this plan precisely:`, plan, ``] : []),
                 `## Description`,
                 issue.body || 'No description provided.',
                 ``,
@@ -248,9 +321,10 @@ jobs:
               prompt = [
                 `Fix GitHub issue #${issue.number}: ${issue.title}`,
                 ``,
-                `## Research Analysis (from GPT-5.2)`,
+                `## Research Analysis (from Gemini 3.1 Pro)`,
                 analysis,
                 ``,
+                ...(plan ? [`## Implementation Plan (from Sonnet 4.6)`, `Follow this plan precisely:`, plan, ``] : []),
                 `## Issue Description`,
                 issue.body || 'No description provided.',
                 ``,
@@ -268,10 +342,10 @@ jobs:
 
             fs.writeFileSync('/tmp/agent-prompt.txt', prompt);
 
-      - name: Run coding agent (Opus 4.5)
+      - name: Run coding agent (Opus 4.6)
         run: |
           cat /tmp/agent-prompt.txt | timeout 600 lightweight run \
-            --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
+            --provider copilot --model "github-copilot/claude-opus-4.6" 2>&1 | tail -500 || true
         env:
           OPENCODE_CLIENT: ci
 
@@ -329,7 +403,7 @@ jobs:
         run: |
           ERRORS=$(cat /tmp/validation-errors.txt)
           cat <<ENDPROMPT | timeout 600 lightweight run \
-            --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
+            --provider copilot --model "github-copilot/claude-opus-4.6" 2>&1 | tail -500 || true
           The previous changes failed validation. Fix these errors:
 
           $ERRORS
@@ -346,7 +420,7 @@ jobs:
             mkdir -p /tmp/patches
             git add -A
             git diff --cached > /tmp/patches/fix.patch
-            cp /tmp/pr-summary.txt /tmp/patches/pr-summary.txt 2>/dev/null || echo "Automated fix by Opus 4.5" > /tmp/patches/pr-summary.txt
+            cp /tmp/pr-summary.txt /tmp/patches/pr-summary.txt 2>/dev/null || echo "Automated fix by Opus 4.6" > /tmp/patches/pr-summary.txt
             echo "has_patch=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_patch=false" >> "$GITHUB_OUTPUT"
@@ -360,9 +434,9 @@ jobs:
           path: /tmp/patches/
           retention-days: 1
 
-  # ── Job 4: Finalize — validate + review + create PR ───────────
+  # ── Job 5: Finalize — validate + review + create PR ───────────
   finalize:
-    needs: [validate, research, implement]
+    needs: [validate, research, plan, implement]
     if: always() && needs.validate.outputs.proceed == 'true' && needs.implement.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -415,7 +489,7 @@ jobs:
             echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Quick validation (Sonnet 4.5)
+      - name: Quick validation (GPT-5.3 Codex)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true'
         id: fast_check
         run: |
@@ -424,7 +498,7 @@ jobs:
 
           SYSTEM_PROMPT="You are a fast validation agent for a model registry (JSON/TOML configs). Check for logic errors, security issues, and obvious bugs. Respond with: Line 1: PASS or FAIL. Line 2+: Brief explanation."
           jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "${{ github.event.issue.title }}" --arg system "$SYSTEM_PROMPT" '{
-            "model": "claude-sonnet-4.5",
+            "model": "gpt-5.3-codex",
             "messages": [
               {"role": "system", "content": $system},
               {"role": "user", "content": ("Validate this fix for issue: " + $issue + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:30000]))}
@@ -461,7 +535,7 @@ jobs:
           fi
         timeout-minutes: 3
 
-      - name: Code review (Sonnet 4.5)
+      - name: Code review (Opus 4.6 Fast)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true' && steps.fast_check.outputs.passed != 'false'
         id: review
         run: |
@@ -478,7 +552,7 @@ jobs:
             --arg title "${{ github.event.issue.title }}" \
             --arg body "$ISSUE_BODY" \
             --arg system "$REVIEW_SYSTEM" '{
-            "model": "claude-sonnet-4.5",
+            "model": "claude-opus-4.6-fast",
             "messages": [
               {"role": "system", "content": $system},
               {"role": "user", "content": ("Review this fix for issue: " + $title + "\n\nIssue description:\n" + $body + "\n\nChanged files:\n" + $stat + "\n\nDiff:\n" + ($diff | .[0:50000]) + "\n\nCheck:\n1. Does it fix the issue?\n2. Are config files valid?\n3. Are changes minimal and focused?\n4. Any forbidden files modified (.github/workflows/)?")}
@@ -538,7 +612,7 @@ jobs:
         if: steps.outcome.outputs.result == 'approved'
         id: body
         run: |
-          SUMMARY="Automated fix generated by 4-model agent team."
+          SUMMARY="Automated fix generated by 5-model agent team."
           if [ -f /tmp/patches/pr-summary.txt ]; then
             SUMMARY=$(cat /tmp/patches/pr-summary.txt)
           fi
@@ -553,14 +627,15 @@ jobs:
 
           ${SUMMARY}
 
-          ### 4-Model Agent Team
+          ### 5-Model Agent Team
 
           | Step | Model | Role |
           |------|-------|------|
-          | 🔬 Research | GPT-5.2 | Issue analysis & fix planning |
-          | 🛠️ Implement | Opus 4.5 | Code changes |
-          | ⚡ Validate | Sonnet 4.5 | Logic & security check |
-          | 📝 Review | Sonnet 4.5 | Final code quality review |
+          | 🔬 Research | Gemini 3.1 Pro | Issue analysis & fix planning |
+          | 🧠 Plan | Sonnet 4.6 | Architecture & approach |
+          | 🛠️ Implement | Opus 4.6 | Code changes |
+          | ⚡ Validate | GPT-5.3 Codex | Logic & security check |
+          | 📝 Review | Opus 4.6 Fast | Final code quality review |
 
           ### Changed files
 
@@ -569,7 +644,7 @@ jobs:
           \`\`\`
 
           ---
-          *Generated by [Lightweight Agent](https://github.com/templarsco/lightweight) — 4-model team*
+          *Generated by [Lightweight Agent](https://github.com/templarsco/lightweight) — 5-model team*
           ENDOFBODY
 
       - name: Delete stale branch
@@ -618,10 +693,11 @@ jobs:
                 '',
                 '| Step | Model | Status |',
                 '|------|-------|--------|',
-                '| 🔬 Research | GPT-5.2 | ✅ |',
-                '| 🛠️ Implement | Opus 4.5 | ✅ |',
-                '| ⚡ Validate | Sonnet 4.5 | ✅ |',
-                '| 📝 Review | Sonnet 4.5 | ✅ |',
+                '| 🔬 Research | Gemini 3.1 Pro | ✅ |',
+                '| 🧠 Plan | Sonnet 4.6 | ✅ |',
+                '| 🛠️ Implement | Opus 4.6 | ✅ |',
+                '| ⚡ Validate | GPT-5.3 Codex | ✅ |',
+                '| 📝 Review | Opus 4.6 Fast | ✅ |',
               ].join('\n')
             });
 
@@ -633,7 +709,7 @@ jobs:
           script: |
             const outcome = '${{ steps.outcome.outputs.result }}';
             const reason = outcome === 'fast_check_failed'
-              ? 'Fast validation (Sonnet 4.5) found issues.'
+              ? 'Fast validation (GPT-5.3 Codex) found issues.'
               : `${{ steps.review.outputs.reason }}`.substring(0, 500);
 
             await github.rest.issues.addAssignees({
@@ -665,5 +741,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '🤖 Agent could not produce a valid fix. Flagged for manual review.\n\nModels used: GPT-5.2, Opus 4.5, Sonnet 4.5, Sonnet 4.5'
+              body: '🤖 Agent could not produce a valid fix. Flagged for manual review.\n\nModels used: Gemini 3.1 Pro, Sonnet 4.6, Opus 4.6, GPT-5.3 Codex, Opus 4.6 Fast'
             });
