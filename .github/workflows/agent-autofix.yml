@@ -123,7 +123,7 @@ jobs:
 
             // Get Copilot token
             const tokenResp = execSync(
-              `curl -sf -H "Authorization: token ${process.env.COPILOT_OAUTH_TOKEN}" -H "Accept: application/json" https://api.github.com/copilot_internal/v2/token`,
+              `curl -s -H "Authorization: token ${process.env.COPILOT_OAUTH_TOKEN}" -H "Accept: application/json" -H "User-Agent: GitHubCopilotChat/0.24.2026021001" https://api.github.com/copilot_internal/v2/token`,
               { encoding: 'utf8' }
             );
             const copilotToken = JSON.parse(tokenResp).token;
@@ -157,7 +157,7 @@ jobs:
             fs.writeFileSync('/tmp/research-payload.json', payload);
 
             const response = execSync(
-              `curl -sf -H "Authorization: Bearer ${copilotToken}" -H "Content-Type: application/json" -H "Openai-Intent: conversation-edits" -d @/tmp/research-payload.json https://api.githubcopilot.com/chat/completions`,
+              `curl -s -H "Authorization: Bearer ${copilotToken}" -H "Content-Type: application/json" -H "User-Agent: GitHubCopilotChat/0.24.2026021001" -H "Editor-Version: vscode/1.97.0" -H "Editor-Plugin-Version: copilot-chat/0.24.2026021001" -H "Openai-Organization: github-copilot" -H "Openai-Intent: conversation-edits" -H "Copilot-Integration-Id: vscode-chat" -d @/tmp/research-payload.json https://api.githubcopilot.com/chat/completions`,
               { encoding: 'utf8', timeout: 60000 }
             );
 
@@ -386,9 +386,10 @@ jobs:
         if: steps.apply.outputs.has_patch == 'true'
         id: token
         run: |
-          TOKEN=$(curl -sf \
+          TOKEN=$(curl -s \
             -H "Authorization: token ${{ secrets.COPILOT_OAUTH_TOKEN }}" \
             -H "Accept: application/json" \
+            -H "User-Agent: GitHubCopilotChat/0.24.2026021001" \
             https://api.github.com/copilot_internal/v2/token | jq -r '.token')
 
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
@@ -416,10 +417,15 @@ jobs:
             "temperature": 0
           }' > /tmp/fast-check-payload.json
 
-          RESPONSE=$(curl -sf \
+          RESPONSE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
             -H "Content-Type: application/json" \
+            -H "User-Agent: GitHubCopilotChat/0.24.2026021001" \
+            -H "Editor-Version: vscode/1.97.0" \
+            -H "Editor-Plugin-Version: copilot-chat/0.24.2026021001" \
+            -H "Openai-Organization: github-copilot" \
             -H "Openai-Intent: conversation-edits" \
+            -H "Copilot-Integration-Id: vscode-chat" \
             -d @/tmp/fast-check-payload.json \
             https://api.githubcopilot.com/chat/completions 2>&1) || true
 
@@ -464,10 +470,15 @@ jobs:
             "temperature": 0
           }' > /tmp/review-payload.json
 
-          RESPONSE=$(curl -sf \
+          RESPONSE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
             -H "Content-Type: application/json" \
+            -H "User-Agent: GitHubCopilotChat/0.24.2026021001" \
+            -H "Editor-Version: vscode/1.97.0" \
+            -H "Editor-Plugin-Version: copilot-chat/0.24.2026021001" \
+            -H "Openai-Organization: github-copilot" \
             -H "Openai-Intent: conversation-edits" \
+            -H "Copilot-Integration-Id: vscode-chat" \
             -d @/tmp/review-payload.json \
             https://api.githubcopilot.com/chat/completions 2>&1) || true
 
@@ -560,7 +571,7 @@ jobs:
           body-path: /tmp/pr-body.md
           commit-message: "fix: resolve #${{ github.event.issue.number }}"
           delete-branch: true
-          labels: automated,needs-review
+          labels: automated
 
       - name: Assign reviewer
         if: steps.outcome.outputs.result == 'approved' && steps.pr.outputs.pull-request-number
@@ -608,12 +619,6 @@ jobs:
               ? 'Fast validation (Opus 4.6 Fast) found issues.'
               : `${{ steps.review.outputs.reason }}`.substring(0, 500);
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
-              labels: ['needs-review']
-            });
             await github.rest.issues.addAssignees({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -633,12 +638,6 @@ jobs:
         with:
           github-token: ${{ steps.bot.outputs.token }}
           script: |
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
-              labels: ['needs-review']
-            });
             await github.rest.issues.addAssignees({
               owner: context.repo.owner,
               repo: context.repo.repo,
