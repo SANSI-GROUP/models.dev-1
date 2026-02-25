@@ -255,7 +255,7 @@ jobs:
 
       - name: Run coding agent (Opus 4.5)
         run: |
-          cat /tmp/agent-prompt.txt | timeout 600 lightweight run --variant max \
+          cat /tmp/agent-prompt.txt | timeout 600 lightweight run \
             --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
         env:
           OPENCODE_CLIENT: ci
@@ -313,7 +313,7 @@ jobs:
         if: steps.validate.outputs.passed == 'false'
         run: |
           ERRORS=$(cat /tmp/validation-errors.txt)
-          cat <<ENDPROMPT | timeout 600 lightweight run --variant max \
+          cat <<ENDPROMPT | timeout 600 lightweight run \
             --provider copilot --model "github-copilot/claude-opus-4.5" 2>&1 | tail -500 || true
           The previous changes failed validation. Fix these errors:
 
