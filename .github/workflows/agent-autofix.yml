@@ -261,24 +261,26 @@ jobs:
         env:
           COPILOT_GHU_TOKEN: ${{ secrets.COPILOT_GHU_TOKEN }}
         run: |
-          # Seed auth.json with GHU token directly — the CLI's copilot plugin
-          # sends refresh as Bearer token, and the Copilot API accepts ghu_ tokens.
-          # Do NOT exchange for JWT here — that would break the CLI auth flow.
+          # Exchange GHU token for JWT + enterprise endpoint
+          TOKEN_RESP=$(curl -s --max-time 30 \
+            -H "Authorization: token $COPILOT_GHU_TOKEN" \
+            https://api.github.com/copilot_internal/v2/token)
+          COPILOT_JWT=$(echo "$TOKEN_RESP" | jq -r '.token // empty')
+          COPILOT_API=$(echo "$TOKEN_RESP" | jq -r '.endpoints.api // "https://api.enterprise.githubcopilot.com"')
+          if [ -z "$COPILOT_JWT" ]; then
+            echo "::error::Failed to exchange GHU token for JWT"
+            echo "Response: $TOKEN_RESP"
+            exit 1
+          fi
+          echo "Copilot JWT obtained (${#COPILOT_JWT} chars), endpoint: $COPILOT_API"
           mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json << 'AUTHEOF'
-          {
-            "github-copilot": {
-              "type": "oauth",
-              "refresh": "PLACEHOLDER_GHU",
-              "access": "PLACEHOLDER_GHU",
-              "expires": 0
-            }
-          }
-          AUTHEOF
-          # Replace placeholder with actual token (avoids heredoc interpolation issues)
-          sed -i "s/PLACEHOLDER_GHU/$COPILOT_GHU_TOKEN/g" ~/.local/share/opencode/auth.json
+          jq -n \
+            --arg jwt "$COPILOT_JWT" \
+            --arg ghu "$COPILOT_GHU_TOKEN" \
+            '{"github-copilot": {"type": "oauth", "refresh": $jwt, "access": $ghu, "expires": 0}}' \
+            > ~/.local/share/opencode/auth.json
           chmod 600 ~/.local/share/opencode/auth.json
-
+          echo "COPILOT_ENTERPRISE_API_URL=$COPILOT_API" >> "$GITHUB_ENV"
       - name: Prepare implementation prompt
         uses: actions/github-script@v7
         with:
