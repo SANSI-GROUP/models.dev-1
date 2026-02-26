@@ -487,12 +487,14 @@ jobs:
       - name: Quick validation (GPT-5.3 Codex)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true'
         id: fast_check
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
           DIFF=$(git diff HEAD)
           DIFF_STAT=$(git diff --stat HEAD)
 
           SYSTEM_PROMPT="You are a fast validation agent for a model registry (JSON/TOML configs). Check for logic errors, security issues, and obvious bugs. Respond with: Line 1: PASS or FAIL. Line 2+: Brief explanation."
-          jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "${{ github.event.issue.title }}" --arg system "$SYSTEM_PROMPT" '{
+          jq -n --arg diff "$DIFF" --arg stat "$DIFF_STAT" --arg issue "$ISSUE_TITLE" --arg system "$SYSTEM_PROMPT" '{
             "model": "gpt-5.3-codex",
             "input": [
               {"role": "system", "content": $system},
@@ -534,18 +536,17 @@ jobs:
       - name: Code review (Opus 4.6 Fast)
         if: steps.apply.outputs.has_patch == 'true' && steps.token.outputs.valid == 'true' && steps.fast_check.outputs.passed != 'false'
         id: review
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           DIFF=$(git diff HEAD)
           DIFF_STAT=$(git diff --stat HEAD)
-          ISSUE_BODY=$(cat <<'ENDISSUE'
-          ${{ github.event.issue.body }}
-          ENDISSUE
-          )
           REVIEW_SYSTEM="You are a senior code reviewer for a model registry (JSON/TOML configs). Review changes for correctness, completeness, and quality. Respond with EXACTLY: Line 1: APPROVE or REJECT. Line 2+: Brief explanation. Nothing else."
           jq -n \
             --arg diff "$DIFF" \
             --arg stat "$DIFF_STAT" \
-            --arg title "${{ github.event.issue.title }}" \
+            --arg title "$ISSUE_TITLE" \
             --arg body "$ISSUE_BODY" \
             --arg system "$REVIEW_SYSTEM" '{
             "model": "claude-opus-4.6-fast",

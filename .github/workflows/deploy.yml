@@ -8,6 +8,9 @@ on:
   repository_dispatch:
     types: [sync-completed]
 
+permissions:
+  contents: read
+
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
