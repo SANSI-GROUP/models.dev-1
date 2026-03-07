@@ -1,17 +1,17 @@
-name = "Route LLM"
+name = "GPT-4o"
 family = "gpt"
-release_date = "2024-01-01"
-last_updated = "2024-01-01"
 attachment = true
 reasoning = false
-temperature = true
-knowledge = "2024-10"
 tool_call = true
+structured_output = true
+temperature = true
+release_date = "2026-02-28"
+last_updated = "2026-03-06"
 open_weights = false
 
 [cost]
-input = 3.00
-output = 15.00
+input = 3.125
+output = 12.5
 
 [limit]
 context = 128_000
