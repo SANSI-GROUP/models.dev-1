@@ -10,6 +10,9 @@ structured_output = true
 knowledge = "2026-03-11"
 open_weights = false
 
+[interleaved]
+field = "reasoning_details"
+
 [cost]
 input = 0.00
 output = 0.00
