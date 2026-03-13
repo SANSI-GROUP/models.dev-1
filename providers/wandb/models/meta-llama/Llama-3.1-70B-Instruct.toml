@@ -1,21 +1,21 @@
-name = "Kimi-K2-Instruct"
-family = "kimi"
-release_date = "2025-07-14"
-last_updated = "2025-07-14"
+name = "Llama 3.1 70B"
+family = "llama"
+release_date = "2024-07-23"
+last_updated = "2026-03-12"
 attachment = false
 reasoning = false
+structured_output = true
 temperature = true
 tool_call = true
-knowledge = "2024-10"
 open_weights = true
 
 [cost]
-input = 1.35
-output = 4.0
+input = 0.8
+output = 0.8
 
 [limit]
 context = 128_000
-output = 16_384
+output = 128_000
 
 [modalities]
 input = ["text"]

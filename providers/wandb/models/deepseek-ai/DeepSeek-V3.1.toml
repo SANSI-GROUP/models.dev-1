@@ -1,21 +1,21 @@
-name = "DeepSeek-V3-0324"
+name = "DeepSeek V3.1"
 family = "deepseek"
-release_date = "2025-03-24"
-last_updated = "2025-03-24"
+release_date = "2025-08-21"
+last_updated = "2026-03-12"
 attachment = false
 reasoning = false
+structured_output = true
 temperature = true
-knowledge = "2024-10"
 tool_call = true
 open_weights = true
 
 [cost]
-input = 1.14
-output = 2.75
+input = 0.55
+output = 1.65
 
 [limit]
 context = 161_000
-output = 8192
+output = 161_000
 
 [modalities]
 input = ["text"]
