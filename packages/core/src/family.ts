@@ -375,6 +375,15 @@ export const ModelFamilyValues = [
 
   // Writer
   "palmyra",
+
+  // ALLaM
+  "allam",
+
+  // Canopy Labs
+  "canopylabs",
+
+  // Groq
+  "groq",
 ] as const;
 
 export const ModelFamily = z.enum(ModelFamilyValues);
