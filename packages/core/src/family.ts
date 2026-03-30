@@ -46,6 +46,7 @@ export const ModelFamilyValues = [
 
   // Alibaba Qwen
   "qwen",
+  "qwen-free",
 
   // DeepSeek
   "deepseek",
