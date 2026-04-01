@@ -14,6 +14,7 @@ export const ModelFamilyValues = [
   "gpt-mini",
   "gpt-nano",
   "gpt-oss",
+  "gpt-image",
 
   // OpenAI o-series (reasoning models)
   "o",
