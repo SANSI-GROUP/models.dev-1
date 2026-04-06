@@ -9,11 +9,11 @@ last_updated = "2026-04-03"
 open_weights = true
 
 [cost]
-input = 0.25
-output = 0.8999999999999999
+input = 0.22
+output = 0.85
 
 [limit]
-context = 262_100
+context = 262_144
 output = 80_000
 
 [modalities]
