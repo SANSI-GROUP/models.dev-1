@@ -2,6 +2,25 @@ import { z } from "zod";
 
 import { ModelFamily } from "./family";
 
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonValue }
+  | JsonValue[];
+
+const JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(JsonValue),
+    z.record(JsonValue),
+  ]),
+);
+
 const Cost = z.object({
   input: z.number().min(0, "Input price cannot be negative"),
   output: z.number().min(0, "Output price cannot be negative"),
@@ -74,6 +93,8 @@ export const Model = z
         npm: z.string().optional(),
         api: z.string().optional(),
         shape: z.enum(["responses", "completions"]).optional(),
+        body: z.record(JsonValue).optional(),
+        headers: z.record(z.string()).optional(),
       })
       .optional(),
     options: z.record(z.string(), z.any()).optional(),
