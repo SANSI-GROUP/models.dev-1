@@ -88,6 +88,23 @@ export const Model = z
       output: z.number().min(0, "Output tokens must be positive"),
     }),
     status: z.enum(["alpha", "beta", "deprecated"]).optional(),
+    experimental: z
+      .object({
+        modes: z
+          .record(
+            z.object({
+              cost: Cost.optional(),
+              provider: z
+                .object({
+                  body: z.record(JsonValue).optional(),
+                  headers: z.record(z.string()).optional(),
+                })
+                .optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
     provider: z
       .object({
         npm: z.string().optional(),
