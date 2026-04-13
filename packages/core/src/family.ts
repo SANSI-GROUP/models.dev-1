@@ -388,6 +388,9 @@ export const ModelFamilyValues = [
 
   // Groq
   "groq",
+
+  // Elephant
+  "elephant",
 ] as const;
 
 export const ModelFamily = z.enum(ModelFamilyValues);
